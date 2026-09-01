@@ -625,3 +625,105 @@ func TestAdminHandlersPreserveGRPCCode(t *testing.T) {
 	})
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 }
+
+// TestRefreshWithoutSelectionRefreshesEverything pins the default a
+// background maintenance pass relies on: no outpoints means the daemon's
+// "all" arm, not an empty selection that would refresh nothing.
+func TestRefreshWithoutSelectionRefreshesEverything(t *testing.T) {
+	t.Parallel()
+
+	svc, rpc := newAdminFixture(t)
+	rpc.refreshResp = &waverpc.RefreshVTXOsResponse{
+		QueuedOutpoints: []string{"abc:0", "def:1"},
+		Status:          "queued",
+	}
+
+	resp, err := svc.Refresh(t.Context(), &wavewalletrpc.RefreshRequest{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"abc:0", "def:1"}, resp.GetQueuedOutpoints())
+	require.False(t, resp.GetDryRun())
+	require.Equal(t, 1, rpc.refreshCalls)
+	require.True(t, rpc.refreshLastReq.GetAll())
+	require.Nil(t, rpc.refreshLastReq.GetOutpoints())
+}
+
+// TestRefreshWithSelectionPassesOutpoints confirms a named selection
+// reaches the daemon as a selection rather than being widened to all,
+// which would spend a user's money on VTXOs they did not pick.
+func TestRefreshWithSelectionPassesOutpoints(t *testing.T) {
+	t.Parallel()
+
+	svc, rpc := newAdminFixture(t)
+	rpc.refreshResp = &waverpc.RefreshVTXOsResponse{
+		QueuedOutpoints: []string{"abc:0"},
+	}
+
+	_, err := svc.Refresh(t.Context(), &wavewalletrpc.RefreshRequest{
+		Outpoints: []string{" abc:0 "},
+	})
+	require.NoError(t, err)
+	require.False(t, rpc.refreshLastReq.GetAll())
+	require.Equal(
+		t, []string{"abc:0"},
+		rpc.refreshLastReq.GetOutpoints().GetOutpoints(),
+	)
+}
+
+// TestRefreshRejectsEmptyOutpoint keeps a blank entry from travelling to
+// the daemon, where the parse failure it causes names the caller's own
+// empty string from two layers away.
+func TestRefreshRejectsEmptyOutpoint(t *testing.T) {
+	t.Parallel()
+
+	svc, rpc := newAdminFixture(t)
+
+	_, err := svc.Refresh(t.Context(), &wavewalletrpc.RefreshRequest{
+		Outpoints: []string{"abc:0", "  "},
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.Equal(t, 0, rpc.refreshCalls)
+}
+
+// TestRefreshDryRunKeepsFeeEstimatePresence is the one that matters for a
+// confirmation dialog: when the daemon could not price the refresh, the
+// total must come back absent rather than zero, or a caller renders "free"
+// over an unknown cost.
+func TestRefreshDryRunKeepsFeeEstimatePresence(t *testing.T) {
+	t.Parallel()
+
+	svc, rpc := newAdminFixture(t)
+	rpc.refreshResp = &waverpc.RefreshVTXOsResponse{
+		Status: "preview",
+		FeeEstimate: &waverpc.RefreshFeeEstimate{
+			EstimateError: "operator unreachable",
+		},
+	}
+
+	resp, err := svc.Refresh(t.Context(), &wavewalletrpc.RefreshRequest{
+		DryRun: true,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetDryRun())
+	require.True(t, rpc.refreshLastReq.GetDryRun())
+
+	estimate := resp.GetFeeEstimate()
+	require.NotNil(t, estimate)
+	require.Nil(t, estimate.EstimatedTotalFeeSat)
+	require.Equal(t, "operator unreachable", estimate.GetEstimateError())
+
+	// A priced estimate travels as a real number.
+	total := int64(1234)
+	rpc.refreshResp.FeeEstimate = &waverpc.RefreshFeeEstimate{
+		EstimatedTotalFeeSat: &total,
+		FreeRefreshEligible:  false,
+	}
+	resp, err = svc.Refresh(t.Context(), &wavewalletrpc.RefreshRequest{
+		DryRun: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetFeeEstimate().EstimatedTotalFeeSat)
+	require.EqualValues(
+		t, 1234, resp.GetFeeEstimate().GetEstimatedTotalFeeSat(),
+	)
+}

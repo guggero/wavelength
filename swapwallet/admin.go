@@ -608,3 +608,89 @@ func errorString(err error) string {
 
 	return err.Error()
 }
+
+// refresh re-issues the selected VTXOs into a new batch by proxying
+// waverpc.RefreshVTXOs.
+//
+// An empty selection means "everything that needs it", which is what the
+// daemon's `all` arm does; naming outpoints is for a caller acting on a
+// user's selection. The daemon accepts expired VTXOs as well as live ones,
+// which is the whole point of exposing this at the wallet layer: a wallet
+// that was offline through its refresh window has no other way back to a
+// spendable balance.
+func (s *Service) refresh(ctx context.Context,
+	req *wavewalletrpc.RefreshRequest) (
+	*wavewalletrpc.RefreshResponse, error) {
+
+	if s.deps == nil || s.deps.RPCServer == nil {
+		return nil, statusSwapBackendUnavailable()
+	}
+
+	daemonReq := &waverpc.RefreshVTXOsRequest{
+		DryRun: req.GetDryRun(),
+	}
+
+	// Reject a blank outpoint rather than passing it down: the daemon
+	// would fail to parse it and the caller would get a message about
+	// its own empty string from two layers away.
+	outpoints := make([]string, 0, len(req.GetOutpoints()))
+	for _, outpoint := range req.GetOutpoints() {
+		trimmed := strings.TrimSpace(outpoint)
+		if trimmed == "" {
+			return nil, status.Error(
+				codes.InvalidArgument,
+				"outpoints must not contain empty entries",
+			)
+		}
+		outpoints = append(outpoints, trimmed)
+	}
+
+	switch {
+	case len(outpoints) > 0:
+		daemonReq.Selection = &waverpc.RefreshVTXOsRequest_Outpoints{
+			Outpoints: &waverpc.OutpointSelection{
+				Outpoints: outpoints,
+			},
+		}
+
+	default:
+		daemonReq.Selection = &waverpc.RefreshVTXOsRequest_All{
+			All: true,
+		}
+	}
+
+	resp, err := s.deps.RPCServer.RefreshVTXOs(ctx, daemonReq)
+	if err != nil {
+		return nil, status.Errorf(status.Code(err),
+			"refresh vtxos: %v", err)
+	}
+
+	return &wavewalletrpc.RefreshResponse{
+		QueuedOutpoints: resp.GetQueuedOutpoints(),
+		DryRun:          req.GetDryRun(),
+		FeeEstimate:     refreshFeeEstimate(resp.GetFeeEstimate()),
+	}, nil
+}
+
+// refreshFeeEstimate narrows the daemon's fee preview to the wallet
+// surface's summary shape, keeping the presence contract that matters: the
+// total stays absent rather than becoming zero when the estimate degraded,
+// so a caller cannot misread a missing number as a free refresh.
+func refreshFeeEstimate(
+	estimate *waverpc.RefreshFeeEstimate) *wavewalletrpc.RefreshFeeEstimate {
+
+	if estimate == nil {
+		return nil
+	}
+
+	out := &wavewalletrpc.RefreshFeeEstimate{
+		FreeRefreshEligible: estimate.GetFreeRefreshEligible(),
+		EstimateError:       estimate.GetEstimateError(),
+	}
+	if estimate.EstimatedTotalFeeSat != nil {
+		total := estimate.GetEstimatedTotalFeeSat()
+		out.EstimatedTotalFeeSat = &total
+	}
+
+	return out
+}
