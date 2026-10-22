@@ -830,7 +830,7 @@ func (b *CPFPBroadcaster) broadcastWithCPFP(ctx context.Context, height int32,
 	req *BroadcastRequest, txid chainhash.Hash, anchorIdx int) (
 	*BroadcastResult, error) {
 
-	// Derive the change pkScript first so its script class can inform
+	// Obtain the parent's change pkScript so its script class can inform
 	// the child's vsize estimate. A failure here means we cannot build
 	// a CPFP child at all, so we fall straight through to broadcasting
 	// the parent directly; no fee-input reservation has been made yet,
