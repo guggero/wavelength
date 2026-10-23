@@ -378,6 +378,16 @@ func (s *feeBumpStateFanoutPending) processDemands(ctx context.Context,
 			return env.refreshRebroadcast(ctx, pending, height), nil
 		}
 
+		// A timeout, canceled RPC or unclassified backend response does
+		// not prove that the previously submitted fanout was rejected.
+		// Preserve its candidate, reservations and confirmation watch.
+		// Surface the operational failure without destroying recovery.
+		if ClassifyBroadcastFailure(err) == BroadcastFailureUnknown {
+			env.lastErr = fmt.Errorf("rebroadcast fanout: %w", err)
+
+			return env.refreshRebroadcast(ctx, pending, height), nil
+		}
+
 		// A hard rejection means the fanout is no longer valid; release
 		// it and return to idle, then immediately rebuild from scratch
 		// within this same turn by routing the demand event back into
@@ -485,9 +495,9 @@ func (s *feeBumpStateFanoutPending) processParentEvicted(ctx context.Context,
 }
 
 // refreshRebroadcast builds the fanout-pending transition that refreshes the
-// in-flight fanout's last-broadcast height after a successful rebroadcast.
-// Transitions are pure with respect to the carried state, so a fresh pending
-// value is built rather than mutating the one in the current state.
+// in-flight fanout's last-broadcast height after a retained rebroadcast
+// attempt. Transitions are pure with respect to the carried state, so a fresh
+// pending value is built rather than mutating the one in the current state.
 func (env *feeBumpEnvironment) refreshRebroadcast(ctx context.Context,
 	pending *pendingFeeInputFanout, height int32) *feeBumpStateTransition {
 

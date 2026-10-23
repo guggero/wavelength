@@ -23,6 +23,8 @@ import (
 	"github.com/lightninglabs/wavelength/walletcore"
 	fn "github.com/lightningnetwork/lnd/fn/v2"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // staticChainSourceRef is a small programmable chainsource actor ref for unit
@@ -3306,12 +3308,17 @@ func TestFeeInputFanoutRejectsRewrittenOutputs(t *testing.T) {
 }
 
 // TestFeeInputFanoutRebroadcastsPendingFanout keeps the same funded candidate
-// across successful rebroadcasts and ambiguous spent-input responses.
+// across successful rebroadcasts, ambiguous spent-input responses and transport
+// failures. A failed retry cannot disprove the original submission.
 func TestFeeInputFanoutRebroadcastsPendingFanout(t *testing.T) {
 	t.Parallel()
 
 	for _, rebroadcastErr := range []error{
 		nil, fmt.Errorf("transaction rejected: output already spent"),
+		context.Canceled,
+		fmt.Errorf("rebroadcast: %w", context.DeadlineExceeded),
+		status.Error(codes.Unavailable, "connection lost"),
+		fmt.Errorf("unclassified backend failure"),
 	} {
 		t.Run(fmt.Sprint(rebroadcastErr), func(t *testing.T) {
 			var broadcasts []*wire.MsgTx
@@ -3372,7 +3379,13 @@ func TestFeeInputFanoutRebroadcastsPendingFanout(t *testing.T) {
 			require.Len(t, broadcasts, 1)
 
 			_, err = c.EnsureSupply(t.Context(), demands, 5, 102, 2)
-			require.NoError(t, err)
+			if rebroadcastErr != nil &&
+				!isAmbiguousSpendError(rebroadcastErr) {
+
+				require.ErrorIs(t, err, rebroadcastErr)
+			} else {
+				require.NoError(t, err)
+			}
 			require.Len(t, broadcasts, 2)
 			require.Equal(
 				t, broadcasts[0].TxHash(),
@@ -3380,13 +3393,37 @@ func TestFeeInputFanoutRebroadcastsPendingFanout(t *testing.T) {
 			)
 			require.NotNil(t, c.PendingFanout())
 			require.Equal(t, pending.txid, c.PendingFanout().txid)
+			for parent, outpoints := range pending.assignments {
+				state := b.parentStates[parent]
+				for _, op := range outpoints {
+					require.Contains(
+						t, state.PredictedFeeInputs, op,
+					)
+				}
+			}
 			_, err = c.EnsureSupply(t.Context(), demands, 5, 103, 2)
 			require.NoError(t, err)
 			require.Len(t, broadcasts, 2)
+
+			// A delayed confirmation of the original candidate
+			// still promotes its reserved outputs instead of losing
+			// supply.
+			c.OnFanoutConfirmed(t.Context(), pending.txid)
+			require.Nil(t, c.PendingFanout())
+			for parent, outpoints := range pending.assignments {
+				state := b.parentStates[parent]
+				require.Empty(t, state.PredictedFeeInputs)
+				for _, op := range outpoints {
+					feeInput := state.UsedFeeInputs[op]
+					require.True(t, feeInput.Confirmed)
+				}
+			}
 		})
 	}
 }
 
+// TestFeeInputFanoutClearsRejectedPendingFanout keeps explicit fee rejection
+// on the rebuild path rather than treating every failure as ambiguous.
 func TestFeeInputFanoutClearsRejectedPendingFanout(t *testing.T) {
 	t.Parallel()
 
@@ -3400,7 +3437,7 @@ func TestFeeInputFanoutClearsRejectedPendingFanout(t *testing.T) {
 			require.True(t, ok)
 			broadcasts++
 			if broadcasts == 2 {
-				return nil, fmt.Errorf("fanout rejected")
+				return nil, fmt.Errorf("min relay fee not met")
 			}
 
 			return &chainsource.BroadcastTxResponse{
