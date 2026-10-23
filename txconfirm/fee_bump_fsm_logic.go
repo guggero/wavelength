@@ -86,6 +86,11 @@ func (s *feeBumpStateIdle) stayIdle(env *feeBumpEnvironment, failure error) (
 func (s *feeBumpStateIdle) ProcessEvent(ctx context.Context, event feeBumpEvent,
 	env *feeBumpEnvironment) (*feeBumpStateTransition, error) {
 
+	// The actor joins accepted transitions even after caller cancellation.
+	// Bound dependency IO so that join, including shutdown, can finish.
+	ctx, cancel := context.WithTimeout(ctx, env.transitionTimeout)
+	defer cancel()
+
 	switch event := event.(type) {
 	case *feeBumpDemandsObserved:
 		return s.processDemands(ctx, event, env)
@@ -312,6 +317,9 @@ func (s *feeBumpStateFanoutPending) feeBumpStateSealed() {}
 func (s *feeBumpStateFanoutPending) ProcessEvent(ctx context.Context,
 	event feeBumpEvent, env *feeBumpEnvironment) (*feeBumpStateTransition,
 	error) {
+
+	ctx, cancel := context.WithTimeout(ctx, env.transitionTimeout)
+	defer cancel()
 
 	switch event := event.(type) {
 	case *feeBumpDemandsObserved:

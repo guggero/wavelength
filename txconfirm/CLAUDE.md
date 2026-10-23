@@ -150,6 +150,13 @@ For field-level detail, use `go doc github.com/lightninglabs/wavelength/txconfir
   state machine without the caller's cancellation or database transaction.
   Explicit setup cleanup, terminal eviction, cancellation, and actor shutdown
   stop it.
+- **The fanout FSM is actor-owned.** Its first demand may arrive in an Ask.
+  It starts without that turn's cancellation or database transaction and
+  remains usable on later blocks. The actor joins each accepted transition
+  despite caller cancellation before touching shared reservations again,
+  then applies its outbox with a fresh bounded context. Each transition's IO
+  has a 30-second ceiling. Shutdown joins the turn before stopping the worker;
+  it cannot rely on OnStop to interrupt an in-flight transition.
 - **TRUC version gate**: `CPFPBroadcaster.Submit` rejects parents whose
   `Tx.Version != arktx.TxVersion` (v3). Pattern-based anchor detection
   on non-v3 parents is structurally unsafe.
