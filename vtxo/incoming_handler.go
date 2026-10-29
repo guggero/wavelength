@@ -164,11 +164,9 @@ type IncomingVTXOExtras struct {
 	// rejects empty-ancestry targets before advancing.
 	Ancestry []Ancestry
 
-	// CreatedHeight is the block height at which the VTXO became
-	// relevant on-chain. validateProofDescriptorShape rejects a
-	// zero value (a freshly-materialized descriptor must commit
-	// to which block its round commit confirmed in, or sweep
-	// scheduling has no reference point).
+	// CreatedHeight is the earliest locally confirmed commitment
+	// height after the production fetcher authenticates the ancestry.
+	// The indexer scalar is only a lookup hint before that check.
 	CreatedHeight int32
 
 	// BatchExpiry is derived from locally confirmed commitment
@@ -507,6 +505,7 @@ func (h *IncomingVTXOHandler) persist(ctx context.Context, desc *Descriptor) (
 // sameIncomingVTXO proves persistence found the row for this event. The
 // immutable script, round, chain anchor, and
 // authenticated expiry must all match before the duplicate is accepted.
+// Creation height is derived metadata and can differ across an upgrade.
 func sameIncomingVTXO(existing, incoming *Descriptor) bool {
 	if existing == nil || incoming == nil {
 		return false
@@ -520,7 +519,6 @@ func sameIncomingVTXO(existing, incoming *Descriptor) bool {
 		existing.CommitmentTxID == incoming.CommitmentTxID &&
 		existing.BatchExpiry == incoming.BatchExpiry &&
 		existing.RelativeExpiry == incoming.RelativeExpiry &&
-		existing.CreatedHeight == incoming.CreatedHeight &&
 		len(existing.Ancestry) > 0
 }
 
