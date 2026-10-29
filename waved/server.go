@@ -2724,7 +2724,9 @@ func (s *Server) startWalletDependentActors(ctx context.Context,
 	],
 	timeoutRef actor.TellOnlyRef[timeout.Msg]) error {
 
-	s.expiryAuthenticator = NewBatchExpiryAuthenticator(chainSourceRef)
+	s.expiryAuthenticator = NewBatchExpiryAuthenticator(
+		chainSourceRef, s.cfg.legacyProofScanFloor(),
+	)
 
 	// -------------------------------------------------------
 	// 9. Register the wallet (boarding) actor.

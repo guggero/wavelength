@@ -236,7 +236,11 @@ For field-level detail, use `go doc github.com/lightninglabs/wavelength/waved.<S
 - `batchExpiryAuthenticator` is the shared acceptance boundary for new indexed
   VTXOs. It uses bounded one-shot chain-source confirmation futures, validates
   the confirmed transaction through `vtxo.AuthenticateBatchEvidence`, and
-  unregisters each watch. Thin incoming events, OOR receives, indexed recovery,
+  unregisters each watch. Zero commitment hints use the configured network
+  deployment floor only when the local tip has reached it; otherwise they
+  use block 1, matching unroll. Nonzero hints pass through unchanged. The
+  tip lookup shares the authentication deadline, and failures remain
+  retryable. Thin incoming events, OOR receives, indexed recovery,
   and custom refresh metadata use it before persistence or signing. Existing
   rows whose creation height exceeds expiry retry a bounded
   local confirmation check on block epochs. Repair changes only creation
