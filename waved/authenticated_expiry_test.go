@@ -36,7 +36,8 @@ func TestIndexedExpiryReadBoundsSilentConfirmation(t *testing.T) {
 	}
 	start := time.Now()
 	verified, err := authenticateIndexedExpiry(
-		t.Context(), indexed, NewBatchExpiryAuthenticator(chainSource),
+		t.Context(), indexed,
+		NewBatchExpiryAuthenticator(chainSource, 1),
 	)
 	require.NoError(t, err)
 	require.Zero(t, verified.batchExpiry)
