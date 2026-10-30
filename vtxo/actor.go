@@ -568,7 +568,8 @@ func (a *VTXOActor) quoteRefreshFee(ctx context.Context, vtxo *Descriptor,
 	)
 }
 
-// Start initializes the actor and subscribes to block epochs.
+// Start initializes the actor, subscribes to block epochs and asks for the
+// current tip, so that expiry is classified without waiting for a block.
 func (a *VTXOActor) Start(ctx context.Context,
 	selfRef actor.TellOnlyRef[actormsg.VTXOActorMsg]) error {
 
@@ -579,7 +580,13 @@ func (a *VTXOActor) Start(ctx context.Context,
 		return nil
 	}
 
-	return a.subscribeBlockEpochs(ctx)
+	if err := a.subscribeBlockEpochs(ctx); err != nil {
+		return err
+	}
+
+	a.requestStartTip(ctx)
+
+	return nil
 }
 
 // Stop unsubscribes from block epochs.
@@ -598,6 +605,18 @@ func (a *VTXOActor) Receive(ctx context.Context,
 		slog.String("outpoint", a.cfg.VTXO.Outpoint.String()),
 		slog.String("current_state", fmt.Sprintf("%T", a.state)),
 	)
+
+	if startTip, ok := event.(*startTipEvent); ok {
+		epoch, ok := a.startTipEpoch(ctx, startTip)
+		if !ok {
+			return fn.Ok[actormsg.VTXOActorResp](VTXOActorResponse{
+				PriorState: a.state,
+				NewState:   a.state,
+			})
+		}
+
+		event = epoch
+	}
 
 	vtxoEvent, ok := event.(VTXOEvent)
 	if !ok {
